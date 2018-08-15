@@ -1,0 +1,50 @@
+language: php
+
+php:
+  - 7.1
+
+env:
+  global:
+    - REGISTRY_URL=registry.hub.docker.com
+    - IMAGE_REPO=magento2_build
+    - PROJECT_NAME=firadaboss
+    
+build:  
+  cache: false
+  
+  pre-ci:
+    
+  pre_ci_boot:
+    options: "-v /test_host:/test_container -v /app_host:/app_container"
+
+  ci:
+    - cp -R . /app_container    #copy checked out gitrepo from build container into build host for sharing with other containers spawned by the docker-compose        
+    - docker-compose -p fv -f shippable/docker-compose-shippable.yml up --quiet-pull --force-recreate -V --build -d
+    - docker exec fv_web_1 sh -c 'pwd && cd /var/www/html && ls'
+    - docker exec fv_web_1 sh -c 'cp /var/www/html/install.sh /usr/local/bin/setup-env && chmod +x /usr/local/bin/setup-env'
+    - docker exec fv_web_1 setup-env
+    - docker exec fv_web_1 install-magento
+    - docker exec fv_web_1 install-sampledata
+    - docker exec fv_web_1 mkdir -p /test_web/testresults
+    - docker exec fv_web_1 php -f /var/www/html/vendor/bin/phpunit -- --log-junit /test_web/testresults/junit.xml -c /var/www/html/dev/tests/unit/phpunit.xml.dist --filter ToolbarEntryTest
+
+  post_ci:
+    - cp -R /test_container/testresults/* $SHIPPABLE_BUILD_DIR/shippable/testresults/    #copy test result from host into build container
+    - docker commit fv_web_1 $REGISTRY_URL/$PROJECT_NAME/$IMAGE_REPO:$BRANCH.$BUILD_NUMBER
+    - docker push $REGISTRY_URL/$PROJECT_NAME/$IMAGE_REPO:$BRANCH.$BUILD_NUMBER 
+    - docker-compose -p fv -f shippable/docker-compose-shippable.yml down --rmi all -v   
+    
+  
+  on_failure:
+    - cp -R /test_container/testresults/* $SHIPPABLE_BUILD_DIR/shippable/testresults/    #copy test result from host into build container
+    - docker-compose -p fv -f shippable/docker-compose-shippable.yml down --rmi all -v
+
+    
+
+integrations:
+  hub:
+    - integrationName: docker_integration
+      type: dockerRegistryLogin
+      
+notifications:
+  email: false
